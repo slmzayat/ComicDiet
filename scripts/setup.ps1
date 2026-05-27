@@ -4,82 +4,85 @@
     ComicDiet Setup - One-time installer and dependency bootstrapper.
 .DESCRIPTION
     Run this once after cloning or downloading ComicDiet.
-    Handles everything required to run ComicDiet.ps1:
+    Handles everything required to run ComicDiet:
 
       1. Detects PowerShell version and relaunches in PS7 if available,
          or installs PS7 via winget if not.
       2. Sets the execution policy for the current user (RemoteSigned).
-      3. Unblocks all .ps1 files in the repo (required after ZIP download).
+      3. Unblocks all .ps1 files in the scripts/ folder (required after ZIP download).
       4. Installs 7-Zip via winget if not already present.
       5. Downloads cjpegli.exe from the official libjxl GitHub release,
-         extracts it into this folder, and displays its SHA-256 hash.
-      6. Optionally registers a right-click context menu entry on folders.
+         extracts it into scripts/, and displays its SHA-256 hash.
+      6. Optionally registers a right-click context menu entry on folders
+         (launches the GUI with the folder pre-populated).
+      7. Optionally creates a Desktop shortcut to ComicDiet.bat.
 
     Safe to re-run. All steps are idempotent.
 #>
 
 # -------------------------------------------------------------------------
-# Dracula Theme (matches ComicDiet.ps1)
+# Catppuccin Mocha palette (matches ComicDiet.ps1 and ComicDiet-CLI.ps1)
 # -------------------------------------------------------------------------
-$ESC    = [char]27
-$DrFg      = "$ESC[38;2;248;248;242m" # F8F8F2 Foreground
-$DrCyan    = "$ESC[38;2;139;233;253m" # 8BE9FD Cyan
-$DrGreen   = "$ESC[38;2;80;250;123m"  # 50FA7B Green
-$DrYellow  = "$ESC[38;2;241;250;140m" # F1FA8C Yellow
-$DrPink    = "$ESC[38;2;255;121;198m" # FF79C6 Pink
-$DrPurple  = "$ESC[38;2;189;147;249m" # BD93F9 Purple
-$DrRed     = "$ESC[38;2;255;85;85m"   # FF5555 Red
-$DrDim     = "$ESC[38;2;98;114;164m"  # 6272A4 Comment
-$Reset     = "$ESC[0m"
-$Border    = "=" * 47
+$ESC = [char]27
+$CtpText      = "$ESC[38;2;205;214;244m" # CDD6F4 - primary text
+$CtpSubtext0  = "$ESC[38;2;166;173;200m" # A6ADC8 - muted text
+$CtpOverlay0  = "$ESC[38;2;108;112;134m" # 6C7086 - decorative
+$CtpMauve     = "$ESC[38;2;203;166;247m" # CBA6F7 - primary accent (brand)
+$CtpLavender  = "$ESC[38;2;180;190;254m" # B4BEFE - secondary accent
+$CtpSky       = "$ESC[38;2;137;220;235m" # 89DCEB - headers
+$CtpGreen     = "$ESC[38;2;166;227;161m" # A6E3A1 - success
+$CtpYellow    = "$ESC[38;2;249;226;175m" # F9E2AF - warnings
+$CtpRed       = "$ESC[38;2;243;139;168m" # F38BA8 - errors
+$Reset        = "$ESC[0m"
+$Border       = "=" * 47
 
 # -------------------------------------------------------------------------
 # Helpers
 # -------------------------------------------------------------------------
 function Write-Header {
     Write-Host ""
-    Write-Host "${DrPink}$Border${Reset}"
-    Write-Host "${DrCyan}          COMICDIET SETUP INSTALLER          ${Reset}"
-    Write-Host "${DrPink}$Border${Reset}"
-    Write-Host "${DrDim}   Installing dependencies for ComicDiet.ps1  ${Reset}"
-    Write-Host "${DrPink}$Border${Reset}"
+    Write-Host "${CtpMauve}$Border${Reset}"
+    Write-Host "${CtpSky}          COMICDIET SETUP INSTALLER          ${Reset}"
+    Write-Host "${CtpMauve}$Border${Reset}"
+    Write-Host "${CtpOverlay0}   Installing dependencies for ComicDiet.ps1  ${Reset}"
+    Write-Host "${CtpMauve}$Border${Reset}"
     Write-Host ""
 }
 
 function Write-StepOK($label, $detail = "") {
     if ($detail) {
-        Write-Host "${DrGreen}[ OK ]${Reset} ${DrFg}$label${Reset} ${DrDim}$detail${Reset}"
+        Write-Host "${CtpGreen}[ OK ]${Reset} ${CtpText}$label${Reset} ${CtpOverlay0}$detail${Reset}"
     } else {
-        Write-Host "${DrGreen}[ OK ]${Reset} ${DrFg}$label${Reset}"
+        Write-Host "${CtpGreen}[ OK ]${Reset} ${CtpText}$label${Reset}"
     }
 }
 
 function Write-StepWarn($label, $detail = "") {
     if ($detail) {
-        Write-Host "${DrYellow}[ !! ]${Reset} ${DrFg}$label${Reset} ${DrDim}$detail${Reset}"
+        Write-Host "${CtpYellow}[ !! ]${Reset} ${CtpText}$label${Reset} ${CtpOverlay0}$detail${Reset}"
     } else {
-        Write-Host "${DrYellow}[ !! ]${Reset} ${DrFg}$label${Reset}"
+        Write-Host "${CtpYellow}[ !! ]${Reset} ${CtpText}$label${Reset}"
     }
 }
 
 function Write-StepFail($label, $detail = "") {
     if ($detail) {
-        Write-Host "${DrRed}[ XX ]${Reset} ${DrFg}$label${Reset} ${DrDim}$detail${Reset}"
+        Write-Host "${CtpRed}[ XX ]${Reset} ${CtpText}$label${Reset} ${CtpOverlay0}$detail${Reset}"
     } else {
-        Write-Host "${DrRed}[ XX ]${Reset} ${DrFg}$label${Reset}"
+        Write-Host "${CtpRed}[ XX ]${Reset} ${CtpText}$label${Reset}"
     }
 }
 
 function Write-StepInfo($label, $detail = "") {
     if ($detail) {
-        Write-Host "${DrPurple}[ >> ]${Reset} ${DrFg}$label${Reset} ${DrDim}$detail${Reset}"
+        Write-Host "${CtpLavender}[ >> ]${Reset} ${CtpText}$label${Reset} ${CtpOverlay0}$detail${Reset}"
     } else {
-        Write-Host "${DrPurple}[ >> ]${Reset} ${DrFg}$label${Reset}"
+        Write-Host "${CtpLavender}[ >> ]${Reset} ${CtpText}$label${Reset}"
     }
 }
 
 function Write-Indent($text) {
-    Write-Host "        ${DrDim}$text${Reset}"
+    Write-Host "        ${CtpOverlay0}$text${Reset}"
 }
 
 # -------------------------------------------------------------------------
@@ -130,7 +133,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
     Write-Host ""
     Write-StepOK "PowerShell 7 installed"
     Write-Host ""
-    Write-Host "${DrYellow} Action required:${Reset} Close this window and double-click ${DrFg}Install.bat${Reset} again."
+    Write-Host "${CtpYellow} Action required:${Reset} Close this window and double-click ${CtpText}Install.bat${Reset} again."
     Write-Host ""
     Read-Host "Press Enter to exit"
     exit 0
@@ -140,10 +143,13 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 # Running in PS7+. Proceed with full setup.
 # -------------------------------------------------------------------------
 $ErrorActionPreference = "Stop"
-$ScriptDir   = $PSScriptRoot
-$MainScript  = Join-Path $ScriptDir "ComicDiet.ps1"
-$CjpegliPath = Join-Path $ScriptDir "cjpegli.exe"
-$7zPath      = "C:\Program Files\7-Zip\7z.exe"
+$ScriptDir    = $PSScriptRoot                                      # scripts/
+$RepoRoot     = Split-Path $ScriptDir -Parent                      # repo root
+$MainScript   = Join-Path $ScriptDir "ComicDiet.ps1"               # GUI (primary)
+$CliScript    = Join-Path $ScriptDir "ComicDiet-CLI.ps1"           # engine (secondary)
+$CjpegliPath  = Join-Path $ScriptDir "cjpegli.exe"                 # downloaded by this script
+$LauncherBat  = Join-Path $RepoRoot  "ComicDiet.bat"               # user-facing launcher
+$7zPath       = "C:\Program Files\7-Zip\7z.exe"
 
 Write-Header
 
@@ -290,7 +296,7 @@ if (Test-Path $CjpegliPath) {
             if (-not $found) {
                 Write-StepFail "cjpegli.exe not found inside $($asset.name)"
                 Write-Indent "The release asset structure may have changed."
-                Write-Indent "Please report this at: https://github.com/slmzayat/ComicDiet/issues"
+                Write-Indent "Please report this at: https://github.com/YOUR_USERNAME/ComicDiet/issues"
                 exit 1
             }
 
@@ -328,51 +334,95 @@ $already = Test-Path $regKey
 
 if ($already) {
     Write-StepOK "Context menu" "Already registered ('Optimize with ComicDiet')"
-    Write-Host "${DrDim}   To remove it, delete: $regKey${Reset}"
+    Write-Host "${CtpOverlay0}   To remove it, delete: $regKey${Reset}"
 } else {
-    Write-Host "${DrFg} Add 'Optimize with ComicDiet' to folder right-click menu?${Reset} ${DrDim}(y/N)${Reset} " -NoNewline
+    Write-Host "${CtpText} Add 'Optimize with ComicDiet' to folder right-click menu?${Reset} ${CtpOverlay0}(y/N)${Reset} " -NoNewline
     $answer = $Host.UI.ReadLine()
 
     if ($answer -match "^[Yy]$") {
         try {
+            # Icon: prefer custom ComicDiet.ico, fall back to imageres.dll
+            $customIco = Join-Path $ScriptDir "ComicDiet.ico"
+            $ctxIcon   = if (Test-Path $customIco) {
+                "$customIco,0"
+            } else {
+                "$env:SystemRoot\System32\imageres.dll,13"
+            }
+
             New-Item -Path $regKey -Force | Out-Null
-            Set-ItemProperty -Path $regKey -Name "(default)"    -Value "Optimize with ComicDiet"
-            Set-ItemProperty -Path $regKey -Name "Icon"         -Value "`"$CjpegliPath`",0"
+            Set-ItemProperty -Path $regKey -Name "(default)" -Value "Optimize with ComicDiet"
+            Set-ItemProperty -Path $regKey -Name "Icon"      -Value $ctxIcon
 
             New-Item -Path "$regKey\command" -Force | Out-Null
             Set-ItemProperty -Path "$regKey\command" -Name "(default)" `
-                -Value "pwsh.exe -NoProfile -ExecutionPolicy Bypass -File `"$MainScript`" -Target `"%1`""
+                -Value "pwsh.exe -NoProfile -ExecutionPolicy Bypass -File `"$MainScript`" -Source `"%1`""
 
             Write-StepOK "Context menu registered" "Right-click any folder > Optimize with ComicDiet"
         } catch {
             Write-StepWarn "Context menu registration failed" "$_"
         }
     } else {
-        Write-Host "${DrDim}   Skipped. You can re-run setup anytime to add it.${Reset}"
+        Write-Host "${CtpOverlay0}   Skipped. You can re-run setup anytime to add it.${Reset}"
     }
+}
+
+# -------------------------------------------------------------------------
+# Step 7: Desktop shortcut (optional)
+# Creates a .lnk on the Desktop pointing to ComicDiet.bat.
+# Uses ComicDiet.ico if present, falls back to imageres.dll (system icon).
+# -------------------------------------------------------------------------
+Write-Host ""
+Write-Host "${CtpText} Create a Desktop shortcut for ComicDiet?${Reset} ${CtpOverlay0}(y/N)${Reset} " -NoNewline
+$shortcutAnswer = $Host.UI.ReadLine()
+
+if ($shortcutAnswer -match "^[Yy]$") {
+    try {
+        $lnkPath = Join-Path ([System.Environment]::GetFolderPath("Desktop")) "ComicDiet.lnk"
+        $WshShell = New-Object -ComObject WScript.Shell
+        $lnk = $WshShell.CreateShortcut($lnkPath)
+        $lnk.TargetPath       = $LauncherBat
+        $lnk.WorkingDirectory = $RepoRoot
+        $lnk.Description      = "ComicDiet - Comic Archive Optimizer"
+
+        $customIco = Join-Path $ScriptDir "ComicDiet.ico"
+        $lnk.IconLocation = if (Test-Path $customIco) {
+            "$customIco,0"
+        } else {
+            "$env:SystemRoot\System32\imageres.dll,13"
+        }
+
+        $lnk.Save()
+        Write-StepOK "Desktop shortcut created" $lnkPath
+    } catch {
+        Write-StepWarn "Shortcut creation failed" "$_"
+    }
+} else {
+    Write-Host "${CtpOverlay0}   Skipped.${Reset}"
 }
 
 # -------------------------------------------------------------------------
 # Final Summary
 # -------------------------------------------------------------------------
 Write-Host ""
-Write-Host "${DrPink}$Border${Reset}"
-Write-Host "${DrGreen}             SETUP COMPLETE                   ${Reset}"
-Write-Host "${DrPink}$Border${Reset}"
+Write-Host "${CtpMauve}$Border${Reset}"
+Write-Host "${CtpGreen}             SETUP COMPLETE                   ${Reset}"
+Write-Host "${CtpMauve}$Border${Reset}"
 Write-Host ""
-Write-Host "${DrFg} ComicDiet is ready. Run it with:${Reset}"
+Write-Host "${CtpText} ComicDiet is ready.${Reset}"
 Write-Host ""
-Write-Host "${DrDim}   pwsh -File `"$MainScript`" -Target `"C:\Path\To\Comics`"${Reset}"
-Write-Host ""
+Write-Host "${CtpOverlay0}   Double-click ComicDiet.bat to open the app.${Reset}"
 if (Test-Path $regKey) {
-    Write-Host "${DrDim}   Or right-click any folder > Optimize with ComicDiet${Reset}"
-    Write-Host ""
+    Write-Host "${CtpOverlay0}   Or right-click any folder > Optimize with ComicDiet${Reset}"
 }
-Write-Host "${DrFg} Flags:${Reset}"
-Write-Host "${DrDim}   -DryRun        Preview changes without processing${Reset}"
-Write-Host "${DrDim}   -KeepOriginals Skip moving originals to Recycle Bin${Reset}"
 Write-Host ""
-Write-Host "${DrPink}$Border${Reset}"
+Write-Host "${CtpText} CLI (advanced):${Reset}"
+Write-Host "${CtpOverlay0}   pwsh -File `"$CliScript`" -Source `"C:\Path\To\Comics`"${Reset}"
+Write-Host ""
+Write-Host "${CtpText} CLI flags:${Reset}"
+Write-Host "${CtpOverlay0}   -DryRun        Preview without modifying files${Reset}"
+Write-Host "${CtpOverlay0}   -KeepOriginals Skip moving originals to Recycle Bin${Reset}"
+Write-Host ""
+Write-Host "${CtpMauve}$Border${Reset}"
 Write-Host ""
 
 Read-Host "Press Enter to exit"

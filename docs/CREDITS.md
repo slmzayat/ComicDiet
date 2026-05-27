@@ -68,18 +68,18 @@ Copyright (C) Igor Pavlov
 
 ---
 
-## Dracula Theme
+## Catppuccin (Mocha flavor)
 
-**Role:** Terminal color palette
-**Website:** https://draculatheme.com
-**Repository:** https://github.com/dracula/dracula-theme
-**Author:** Zeno Rocha
+**Role:** Color palette for terminal output and GUI
+**Website:** https://catppuccin.com
+**Repository:** https://github.com/catppuccin/catppuccin
+**Style guide:** https://github.com/catppuccin/catppuccin/blob/main/docs/style-guide.md
 **License:** MIT
 
 ```
 MIT License
 
-Copyright (c) 2023 Zeno Rocha
+Copyright (c) 2021 Catppuccin
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -135,4 +135,4 @@ SOFTWARE.
 
 ---
 
-*ComicDiet itself is released under the MIT License. See [LICENSE](LICENSE).*
+*ComicDiet itself is released under the MIT License. See [LICENSE](../LICENSE).*

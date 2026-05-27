@@ -1,16 +1,26 @@
 #Requires -Version 7.4
 <#
 .SYNOPSIS
-    ComicDiet - Comic Archive Optimization Suite
+    ComicDiet CLI - Comic Archive Optimization Engine
 .DESCRIPTION
+    The CLI engine for ComicDiet. Can be run directly for scripting and
+    automation, or launched by ComicDiet.ps1 (the GUI).
+
     Extracts, sanitizes, optimizes, and repacks comic archives sequentially.
-    Image processing is parallelized using Google Jpegli at BelowNormal
-    priority for host system transparency.
+    JPEG images are re-encoded using Google Jpegli (-d 1.0, chroma 4:4:4).
+    WebP images are preserved as-is. Output is always .cbz format.
+    Image processing is parallelized at BelowNormal priority.
 #>
 
+[CmdletBinding(DefaultParameterSetName='Direct')]
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$Target,
+    [Parameter(ParameterSetName='Direct', Mandatory=$true, Position=0)]
+    [string[]]$Source,
+
+    # Alternative: read paths from a UTF-8 text file (one per line).
+    # Used by the GUI to safely handle paths containing commas, quotes, etc.
+    [Parameter(ParameterSetName='ListFile', Mandatory=$true)]
+    [string]$SourceListFile,
 
     [string]$PathTo7z = "C:\Program Files\7-Zip\7z.exe",
     [string]$PathToCjpegli = (Join-Path $PSScriptRoot "cjpegli.exe"),
@@ -19,20 +29,35 @@ param(
     [switch]$KeepOriginals
 )
 
-# --- UI & UX: Dracula Theme Colors (VT Escape Sequences) ---
-# Palette verified for WCAG AA contrast against typical dark terminal backgrounds.
+# Resolve SourceListFile into $Source if provided
+if ($PSCmdlet.ParameterSetName -eq 'ListFile') {
+    if (-not (Test-Path $SourceListFile)) {
+        throw "Source list file not found: $SourceListFile"
+    }
+    $Source = @(Get-Content -Path $SourceListFile -Encoding utf8 |
+                ForEach-Object { $_.Trim() } |
+                Where-Object   { $_ })
+    if ($Source.Count -eq 0) { throw "Source list file is empty: $SourceListFile" }
+}
+
+# --- UI & UX: Catppuccin Mocha Palette (VT Escape Sequences) ---
+# Strict adherence to the Catppuccin style guide:
+# https://github.com/catppuccin/catppuccin/blob/main/docs/style-guide.md
+# Variable names match the official Catppuccin Mocha color names.
 $PSStyle.Progress.View = 'Minimal'
 $ESC = [char]27
-$DrFg      = "$ESC[38;2;248;248;242m" # F8F8F2 Foreground (Standard Text)         AAA
-$DrCyan    = "$ESC[38;2;139;233;253m" # 8BE9FD Cyan (Headers / Optimize)          AAA
-$DrGreen   = "$ESC[38;2;80;250;123m"  # 50FA7B Green (Success / Reclaimed)        AAA
-$DrYellow  = "$ESC[38;2;241;250;140m" # F1FA8C Yellow (Warnings / Trash Notice)   AAA
-$DrOrange  = "$ESC[38;2;255;184;108m" # FFB86C Orange (Extract Phase)             AAA
-$DrPink    = "$ESC[38;2;255;121;198m" # FF79C6 Pink (Borders / Iconic Accents)    AA
-$DrPurple  = "$ESC[38;2;189;147;249m" # BD93F9 Purple (Repack Phase)              AA
-$DrRed     = "$ESC[38;2;255;85;85m"   # FF5555 Red (Errors / Failures)            AA
-$DrDim     = "$ESC[38;2;98;114;164m"  # 6272A4 Comment (Paths - intentionally subdued)
-$Reset     = "$ESC[0m"
+$CtpText      = "$ESC[38;2;205;214;244m" # CDD6F4 - primary text
+$CtpSubtext0  = "$ESC[38;2;166;173;200m" # A6ADC8 - muted text (WCAG AA on all surfaces)
+$CtpOverlay0  = "$ESC[38;2;108;112;134m" # 6C7086 - decorative only (paths, borders)
+$CtpMauve     = "$ESC[38;2;203;166;247m" # CBA6F7 - primary accent (brand)
+$CtpLavender  = "$ESC[38;2;180;190;254m" # B4BEFE - secondary accent (repack phase)
+$CtpSky       = "$ESC[38;2;137;220;235m" # 89DCEB - headers, optimize phase
+$CtpGreen     = "$ESC[38;2;166;227;161m" # A6E3A1 - success
+$CtpYellow    = "$ESC[38;2;249;226;175m" # F9E2AF - warnings
+$CtpPeach     = "$ESC[38;2;250;179;135m" # FAB387 - extract phase
+$CtpRed       = "$ESC[38;2;243;139;168m" # F38BA8 - errors / failures
+$CtpTeal      = "$ESC[38;2;148;226;213m" # 94E2D5 - informational (WebP notice)
+$Reset        = "$ESC[0m"
 
 # Stage glyphs (ASCII keyboard-equivalents for terminal-safe rendering everywhere)
 $IcoExtract  = ">>"
@@ -43,6 +68,7 @@ $IcoSuccess  = "OK"
 $IcoFailed   = "XX"
 $IcoTrash    = "~~"
 $IcoInfo     = ">>"
+$IcoWebP     = "~~"
 
 $ErrorActionPreference = "Stop"
 $SupportedExtensions = @(".cbr", ".cbz", ".cb7", ".cbt")
@@ -57,22 +83,33 @@ if (-not $DryRun) {
     if (-not (Test-Path $PathToCjpegli)) { throw "FATAL: cjpegli not found at $PathToCjpegli" }
 }
 
-# Target Parsing
-$Archives = @()
-if (Test-Path $Target -PathType Container) {
-    $OutputDir = Join-Path $Target "Optimized Comics"
-    $OutputDirEscaped = [regex]::Escape($OutputDir)
-    $Archives = Get-ChildItem -Path $Target -Recurse -File | Where-Object {
-        ($SupportedExtensions -contains $_.Extension.ToLower()) -and
-        ($_.FullName -notmatch $OutputDirEscaped)
+# Source Parsing
+# $Source is [string[]] - accepts one or more folders and/or individual archive files.
+# OutputDir is anchored to the first valid input (consistent, predictable).
+$Archives  = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+$OutputDir = $null
+
+foreach ($entry in $Source) {
+    if (Test-Path $entry -PathType Container) {
+        if (-not $OutputDir) { $OutputDir = Join-Path $entry "Optimized Comics" }
+        $escaped = [regex]::Escape((Join-Path $entry "Optimized Comics"))
+        Get-ChildItem -Path $entry -Recurse -File |
+            Where-Object { ($SupportedExtensions -contains $_.Extension.ToLower()) -and ($_.FullName -notmatch $escaped) } |
+            ForEach-Object { $Archives.Add($_) }
+    } elseif (Test-Path $entry -PathType Leaf) {
+        $file = Get-Item $entry
+        if ($SupportedExtensions -contains $file.Extension.ToLower()) {
+            $Archives.Add($file)
+            if (-not $OutputDir) { $OutputDir = Join-Path $file.DirectoryName "Optimized Comics" }
+        } else {
+            Write-Host "${CtpYellow}[!] Skipping unsupported file: $entry${Reset}"
+        }
+    } else {
+        Write-Host "${CtpYellow}[!] Skipping invalid path: $entry${Reset}"
     }
-} elseif (Test-Path $Target -PathType Leaf) {
-    $file = Get-Item $Target
-    if ($SupportedExtensions -contains $file.Extension.ToLower()) { $Archives += $file }
-    $OutputDir = Join-Path $file.DirectoryName "Optimized Comics"
-} else {
-    throw "Target path is invalid or does not exist."
 }
+
+if (-not $OutputDir) { throw "No valid source paths found." }
 
 $TotalFiles = $Archives.Count
 if ($TotalFiles -eq 0) { Write-Host "[!] No supported comic archives found." -ForegroundColor Yellow; exit }
@@ -106,19 +143,19 @@ if ($ThrottleLimit -lt 1) { $ThrottleLimit = 1 }
 
 # --- Dry Run Execution ---
 if ($DryRun) {
-    Write-Host "`n${DrYellow}[*] DRY RUN ACTIVATED. Operations simulated.${Reset}`n"
-    Write-Host "${DrDim}Calculated Concurrency Limit: $ThrottleLimit threads"
-    Write-Host "Target Output Directory: $OutputDir${Reset}"
+    Write-Host "`n${CtpYellow}[*] DRY RUN ACTIVATED. Operations simulated.${Reset}`n"
+    Write-Host "${CtpOverlay0}Calculated Concurrency Limit: $ThrottleLimit threads"
+    Write-Host "Output Directory: $OutputDir${Reset}"
     if (-not $KeepOriginals) {
-        Write-Host "${DrYellow}[*] Originals would be moved to Recycle Bin upon successful conversion.${Reset}"
+        Write-Host "${CtpYellow}[*] Originals would be moved to Recycle Bin upon successful conversion.${Reset}"
     } else {
-        Write-Host "${DrDim}[*] Originals would be preserved (-KeepOriginals).${Reset}"
+        Write-Host "${CtpOverlay0}[*] Originals would be preserved (-KeepOriginals).${Reset}"
     }
     Write-Host ""
     foreach ($Archive in $Archives) {
         $CleanName = Get-CleanName $Archive.BaseName
-        Write-Host "${DrFg}IN : $($Archive.FullName)${Reset}"
-        Write-Host "${DrCyan}OUT: $OutputDir\$CleanName.cbz${Reset}`n"
+        Write-Host "${CtpText}IN : $($Archive.FullName)${Reset}"
+        Write-Host "${CtpSky}OUT: $OutputDir\$CleanName.cbz${Reset}`n"
     }
     exit
 }
@@ -127,7 +164,7 @@ if ($DryRun) {
 if (-not (Test-Path $OutputDir)) { New-Item -ItemType Directory -Path $OutputDir | Out-Null }
 $ErrorLogPath = Join-Path $OutputDir "ComicDiet_Errors.log"
 $TotalOriginalBytes = 0
-$TotalFinalBytes = 0
+$TotalOptimizedBytes = 0
 $Counter = 0
 $SuccessCount = 0
 $FailCount = 0
@@ -154,29 +191,30 @@ $Logo = @(
     ' \____\___/|_| |_| |_|_|\___|____/|_|\___|\__|'
 )
 # Gradient: Pink > Pink > Purple > Cyan > Cyan (vampire-to-dawn)
-$LogoColors = @($DrPink, $DrPink, $DrPurple, $DrCyan, $DrCyan)
+$LogoColors = @($CtpMauve, $CtpMauve, $CtpLavender, $CtpSky, $CtpSky)
 $Border = ("=" * 47)
 
 Write-Host ""
-Write-Host "${DrPink}$Border${Reset}"
+Write-Host "${CtpMauve}$Border${Reset}"
 for ($i = 0; $i -lt $Logo.Count; $i++) {
     Write-Host "$($LogoColors[$i])$($Logo[$i])${Reset}"
 }
-Write-Host "${DrDim}       Comic Archive Optimization Suite       ${Reset}"
-Write-Host "${DrPink}$Border${Reset}"
-Write-Host "${DrFg} Source      : ${DrDim}$Target${Reset}"
-Write-Host "${DrFg} Output      : ${DrDim}$OutputDir${Reset}"
-Write-Host "${DrFg} Archives    : $TotalFiles files ${DrDim}($TotalInputMB MB)${Reset}"
-Write-Host "${DrFg} Concurrency : $ThrottleLimit threads${Reset}"
-Write-Host "${DrFg} Originals   : ${DrYellow}$OriginalsBehavior${Reset}"
-Write-Host "${DrPink}$Border${Reset}"
+Write-Host "${CtpOverlay0}       Comic Archive Optimization Suite       ${Reset}"
+Write-Host "${CtpMauve}$Border${Reset}"
+$SourceDisplay = if ($Source.Count -eq 1) { $Source[0] } else { "$($Source.Count) sources" }
+Write-Host "${CtpText} Source      : ${CtpOverlay0}$SourceDisplay${Reset}"
+Write-Host "${CtpText} Output      : ${CtpOverlay0}$OutputDir${Reset}"
+Write-Host "${CtpText} Archives    : $TotalFiles files ${CtpOverlay0}($TotalInputMB MB)${Reset}"
+Write-Host "${CtpText} Concurrency : $ThrottleLimit threads${Reset}"
+Write-Host "${CtpText} Originals   : ${CtpYellow}$OriginalsBehavior${Reset}"
+Write-Host "${CtpMauve}$Border${Reset}"
 Write-Host ""
 
 # Summary renderer (invoked from finally to guarantee display on any exit path)
 function Write-ComicDietSummary {
     if ($script:TotalFiles -le 0) { return }
 
-    $SavedBytes = $script:TotalOriginalBytes - $script:TotalFinalBytes
+    $SavedBytes = $script:TotalOriginalBytes - $script:TotalOptimizedBytes
     $SavedMB    = [math]::Round($SavedBytes / 1MB, 2)
     $PctSaved   = if ($script:TotalOriginalBytes -gt 0) {
         [math]::Round(($SavedBytes / $script:TotalOriginalBytes) * 100, 1)
@@ -189,45 +227,45 @@ function Write-ComicDietSummary {
 
     # Failure recap (rendered above the main summary)
     if ($script:FailedArchives.Count -gt 0) {
-        Write-Host "`n${DrRed}===============================================${Reset}"
-        Write-Host "${DrRed}                FAILED ARCHIVES                ${Reset}"
-        Write-Host "${DrRed}===============================================${Reset}"
+        Write-Host "`n${CtpRed}===============================================${Reset}"
+        Write-Host "${CtpRed}                FAILED ARCHIVES                ${Reset}"
+        Write-Host "${CtpRed}===============================================${Reset}"
         foreach ($f in $script:FailedArchives) {
-            Write-Host "${DrRed} -${Reset} ${DrFg}$($f.Name)${Reset}"
-            Write-Host "   ${DrDim}$($f.Reason)${Reset}"
+            Write-Host "${CtpRed} -${Reset} ${CtpText}$($f.Name)${Reset}"
+            Write-Host "   ${CtpOverlay0}$($f.Reason)${Reset}"
         }
     }
 
-    Write-Host "`n${DrPink}===============================================${Reset}"
-    Write-Host "${DrCyan}             COMICDIET BATCH SUMMARY           ${Reset}"
-    Write-Host "${DrPink}===============================================${Reset}"
-    Write-Host "${DrFg} Files Queued    : $script:TotalFiles${Reset}"
-    Write-Host "${DrGreen} Succeeded       : $script:SuccessCount${Reset}"
+    Write-Host "`n${CtpMauve}===============================================${Reset}"
+    Write-Host "${CtpSky}             COMICDIET BATCH SUMMARY           ${Reset}"
+    Write-Host "${CtpMauve}===============================================${Reset}"
+    Write-Host "${CtpText} Files Queued    : $script:TotalFiles${Reset}"
+    Write-Host "${CtpGreen} Succeeded       : $script:SuccessCount${Reset}"
     if ($script:FailCount -gt 0) {
-        Write-Host "${DrRed} Failed          : $script:FailCount${Reset}"
+        Write-Host "${CtpRed} Failed          : $script:FailCount${Reset}"
     } else {
-        Write-Host "${DrDim} Failed          : 0${Reset}"
+        Write-Host "${CtpOverlay0} Failed          : 0${Reset}"
     }
-    Write-Host "${DrDim} Original Size   : $([math]::Round($script:TotalOriginalBytes / 1MB, 2)) MB${Reset}"
-    Write-Host "${DrPurple} Optimized Size  : $([math]::Round($script:TotalFinalBytes / 1MB, 2)) MB${Reset}"
+    Write-Host "${CtpOverlay0} Original Size   : $([math]::Round($script:TotalOriginalBytes / 1MB, 2)) MB${Reset}"
+    Write-Host "${CtpLavender} Optimized Size  : $([math]::Round($script:TotalOptimizedBytes / 1MB, 2)) MB${Reset}"
 
     if ($SavedBytes -gt 0) {
-        Write-Host "${DrGreen} Space Reclaimed : $SavedMB MB${Reset}"
-        Write-Host "${DrGreen} Total Reduction : $PctSaved %${Reset}"
+        Write-Host "${CtpGreen} Space Reclaimed : $SavedMB MB${Reset}"
+        Write-Host "${CtpGreen} Total Reduction : $PctSaved %${Reset}"
     } else {
-        Write-Host "${DrYellow} Space Reclaimed : $SavedMB MB${Reset}"
-        Write-Host "${DrYellow} Total Reduction : $PctSaved %${Reset}"
+        Write-Host "${CtpYellow} Space Reclaimed : $SavedMB MB${Reset}"
+        Write-Host "${CtpYellow} Total Reduction : $PctSaved %${Reset}"
     }
 
     if ($script:TrashCount -gt 0) {
-        Write-Host "${DrYellow} Originals Trashed: $script:TrashCount (Recycle Bin)${Reset}"
+        Write-Host "${CtpYellow} Originals Recycled: $script:TrashCount (Recycle Bin)${Reset}"
     }
     if ($script:TrashFailures -gt 0) {
-        Write-Host "${DrRed} Trash Failures  : $script:TrashFailures${Reset}"
+        Write-Host "${CtpRed} Recycle Failures : $script:TrashFailures${Reset}"
     }
 
-    Write-Host "${DrFg} Total Runtime   : $TotalRuntime${Reset}"
-    Write-Host "${DrPink}===============================================${Reset}`n"
+    Write-Host "${CtpText} Total Runtime   : $TotalRuntime${Reset}"
+    Write-Host "${CtpMauve}===============================================${Reset}`n"
 }
 
 try {
@@ -267,20 +305,29 @@ try {
             $TotalOriginalBytes += $Archive.Length
 
             # Stage 1: Extraction
-            Write-Host "${DrOrange}[$Percentage%] $IcoExtract  EXTRACTING:${Reset} $($Archive.Name)"
+            Write-Host "${CtpPeach}[$Percentage%] $IcoExtract  EXTRACTING:${Reset} $($Archive.Name)"
             $ExtractArgs = "x `"$($Archive.FullName)`" -o`"$TempDir`" -p- -y -bso0 -bsp0"
             $extProcess = Start-Process -FilePath $PathTo7z -ArgumentList $ExtractArgs -Wait -NoNewWindow -PassThru
             if ($extProcess.ExitCode -ne 0) { throw "Extraction failed or archive is password-protected." }
 
             # Stage 2: Sanitization
-            Write-Host "${DrDim}[$Percentage%] $IcoSanitize  SANITIZING: Purging system artifacts...${Reset}"
+            Write-Host "${CtpOverlay0}[$Percentage%] $IcoSanitize  SANITIZING: Purging system artifacts...${Reset}"
             Get-ChildItem -Path $TempDir -Include $JunkFiles -Recurse -Force -File | Remove-Item -Force
             Get-ChildItem -Path $TempDir -Directory -Filter "__MACOSX" -Recurse -Force | Remove-Item -Recurse -Force
 
-            # Stage 3: Optimization
+            # Stage 3: WebP detection (pre-flight before optimization)
+            # WebP files are not processed by Jpegli - they are preserved as-is.
+            # The archive is still converted to CBZ format.
+            $WebPFiles = @(Get-ChildItem -Path $TempDir -File -Recurse |
+                Where-Object { $_.Extension.ToLower() -eq ".webp" })
+            if ($WebPFiles.Count -gt 0) {
+                Write-Host "${CtpTeal}[$Percentage%] $IcoWebP  INFO      :${Reset} $($WebPFiles.Count) WebP image(s) will be preserved as-is."
+            }
+
+            # Stage 4: Optimization
             $Images = Get-ChildItem -Path $TempDir -File -Recurse | Where-Object { $ImageExtensions -contains $_.Extension.ToLower() }
             $TotalImages = @($Images).Count
-            Write-Host "${DrCyan}[$Percentage%] $IcoOptimize  OPTIMIZING:${Reset} Dispatching $TotalImages image(s) to Jpegli ($ThrottleLimit threads)..."
+            Write-Host "${CtpSky}[$Percentage%] $IcoOptimize  OPTIMIZING:${Reset} Dispatching $TotalImages image(s) to Jpegli ($ThrottleLimit threads)..."
 
             $ProgressDict = [System.Collections.Concurrent.ConcurrentDictionary[string, int]]::new()
             $ProgressDict['Done'] = 0
@@ -413,15 +460,15 @@ try {
                 $LeftoverOpt | Remove-Item -Force -ErrorAction SilentlyContinue
             }
 
-            # Stage 4: Repacking
-            Write-Host "${DrPurple}[$Percentage%] $IcoRepack  REPACKING :${Reset} $($Archive.Name)"
+            # Stage 5: Repacking
+            Write-Host "${CtpLavender}[$Percentage%] $IcoRepack  REPACKING :${Reset} $($Archive.Name)"
             $PackArgs = "a -tzip `"$FinalOutPath`" `".\*`" -mx0 -bso0 -bsp0"
             $packProcess = Start-Process -FilePath $PathTo7z -ArgumentList $PackArgs -WorkingDirectory $TempDir -Wait -NoNewWindow -PassThru
             if ($packProcess.ExitCode -ne 0) { throw "Repacking failure." }
 
             # Success Telemetry
             $FinalSize = (Get-Item $FinalOutPath).Length
-            $TotalFinalBytes += $FinalSize
+            $TotalOptimizedBytes += $FinalSize
             $SuccessCount++
             $SuccessfulOriginals.Add($Archive.FullName)
 
@@ -430,9 +477,9 @@ try {
             $ArchiveOutMB     = [math]::Round($FinalSize / 1MB, 2)
             $ArchivePctSaved  = if ($Archive.Length -gt 0) { [math]::Round((($Archive.Length - $FinalSize) / $Archive.Length) * 100, 1) } else { 0 }
             $PctDisplay       = if ($ArchivePctSaved -ge 0) { "-$ArchivePctSaved%" } else { "+$([math]::Abs($ArchivePctSaved))%" }
-            $ImgErrMarker     = if ($ImageErrors.Count -gt 0) { " ${DrYellow}($($ImageErrors.Count) image errors)${Reset}" } else { "" }
+            $ImgErrMarker     = if ($ImageErrors.Count -gt 0) { " ${CtpYellow}($($ImageErrors.Count) image errors)${Reset}" } else { "" }
 
-            Write-Host "${DrGreen}[$Percentage%] $IcoSuccess  SUCCESS [$ArchiveDuration]:${Reset} $(Split-Path -Leaf $FinalOutPath) ${DrDim}($ArchiveInMB MB > $ArchiveOutMB MB, $PctDisplay)${Reset}$ImgErrMarker`n"
+            Write-Host "${CtpGreen}[$Percentage%] $IcoSuccess  SUCCESS [$ArchiveDuration]:${Reset} $(Split-Path -Leaf $FinalOutPath) ${CtpOverlay0}($ArchiveInMB MB > $ArchiveOutMB MB, $PctDisplay)${Reset}$ImgErrMarker`n"
 
         } catch {
             # Archive-level error logging
@@ -442,7 +489,7 @@ try {
             $ErrorMessage = "[$([datetime]::Now.ToString('yyyy-MM-dd HH:mm:ss'))] ARCHIVE: $($Archive.FullName): $_"
             Add-Content -Path $ErrorLogPath -Value $ErrorMessage
             $ArchiveDuration = Format-Duration ([datetime]::Now - $ArchiveStartTime)
-            Write-Host "${DrRed}[$Percentage%] $IcoFailed  FAILED  [$ArchiveDuration]:${Reset} $($Archive.Name). Check error log.`n"
+            Write-Host "${CtpRed}[$Percentage%] $IcoFailed  FAILED  [$ArchiveDuration]:${Reset} $($Archive.Name). Check error log.`n"
         } finally {
             # Drive-Aware Cleanup
             if (Test-Path $TempDir) {
@@ -453,7 +500,7 @@ try {
 
     # --- Post-Batch: Recycle Originals of Successful Conversions ---
     if (-not $KeepOriginals -and $SuccessfulOriginals.Count -gt 0) {
-        Write-Host "${DrYellow}[*] $IcoTrash  Moving $($SuccessfulOriginals.Count) original archive(s) to Recycle Bin...${Reset}"
+        Write-Host "${CtpYellow}[*] $IcoTrash  Moving $($SuccessfulOriginals.Count) original archive(s) to Recycle Bin...${Reset}"
         foreach ($origPath in $SuccessfulOriginals) {
             try {
                 [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(
@@ -464,7 +511,7 @@ try {
                 $TrashCount++
             } catch {
                 $TrashFailures++
-                Add-Content -Path $ErrorLogPath -Value "[$([datetime]::Now.ToString('yyyy-MM-dd HH:mm:ss'))] TRASH FAILED: $origPath -> $_"
+                Add-Content -Path $ErrorLogPath -Value "[$([datetime]::Now.ToString('yyyy-MM-dd HH:mm:ss'))] RECYCLE FAILED: $origPath -> $_"
             }
         }
     }
