@@ -1,0 +1,24 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ComicDiet .gitignore
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Downloaded by scripts/setup.ps1 at install time.
+# Not redistributed - libjxl is BSD 3-Clause; users verify the binary via
+# SHA-256 hash displayed by setup. Run Install.bat to download it.
+scripts/cjpegli.exe
+
+# Runtime temp directory created by ComicDiet-CLI.ps1 during optimization.
+# Location: scripts/Temp/ (relative to $PSScriptRoot of the CLI script).
+scripts/Temp/
+
+# ─── OS metadata ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Editor / IDE ────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.suo
+*.user

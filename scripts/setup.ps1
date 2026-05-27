@@ -401,6 +401,32 @@ if ($shortcutAnswer -match "^[Yy]$") {
 }
 
 # -------------------------------------------------------------------------
+# Step 8: Uninstall shortcut in repo root
+# Always created - not optional. Gives Uninstall.bat a recycle bin icon
+# in Explorer without modifying any system-wide file associations.
+# Icon: shell32.dll index 31 = empty recycle bin (stable across Windows 10/11).
+# -------------------------------------------------------------------------
+$UninstallBat = Join-Path $ScriptDir "Uninstall.bat"
+$UninstallLnk = Join-Path $RepoRoot "Uninstall.lnk"
+
+if (Test-Path $UninstallBat) {
+    try {
+        $wsh2  = New-Object -ComObject WScript.Shell
+        $ulnk  = $wsh2.CreateShortcut($UninstallLnk)
+        $ulnk.TargetPath       = $UninstallBat
+        $ulnk.WorkingDirectory = $RepoRoot
+        $ulnk.Description      = "Uninstall ComicDiet"
+        $ulnk.IconLocation     = "$env:SystemRoot\System32\shell32.dll,31"
+        $ulnk.Save()
+        Write-StepOK "Uninstall shortcut created" $UninstallLnk
+    } catch {
+        Write-StepWarn "Uninstall shortcut" "Could not create: $_"
+    }
+} else {
+    Write-StepWarn "Uninstall shortcut" "Uninstall.bat not found at repo root - skipping"
+}
+
+# -------------------------------------------------------------------------
 # Final Summary
 # -------------------------------------------------------------------------
 Write-Host ""
